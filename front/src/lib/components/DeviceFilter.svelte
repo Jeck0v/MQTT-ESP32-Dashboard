@@ -10,8 +10,16 @@
      * @property {string} topic
      */
 
-    /** @type {{ selectedDevices: string[], allDevices: string[], telemetryData?: TelemetryData[] }} */
-    let { selectedDevices = $bindable(), allDevices, telemetryData = [] } = $props();
+    /**
+     * @typedef {Object} DeviceStatus
+     * @property {string} deviceId
+     * @property {'online' | 'reconnecting' | 'offline'} status
+     * @property {number} lastSeen
+     * @property {string} location
+     */
+
+    /** @type {{ selectedDevices: string[], allDevices: string[], telemetryData?: TelemetryData[], deviceStatuses?: Map<string, DeviceStatus> }} */
+    let { selectedDevices = $bindable(), allDevices, telemetryData = [], deviceStatuses = new Map() } = $props();
 
     /**
      * @param {string} deviceId
@@ -67,6 +75,34 @@
         if (batteryPct > 30) return 'rgba(255, 170, 0, 0.3)';
         return 'rgba(255, 68, 68, 0.3)';
     }
+
+    /**
+     * @param {string} deviceId
+     * @returns {DeviceStatus | null}
+     */
+    function getDeviceStatus(deviceId) {
+        return deviceStatuses.get(deviceId) || null;
+    }
+
+    /**
+     * @param {'online' | 'reconnecting' | 'offline'} status
+     * @returns {string}
+     */
+    function getStatusColor(status) {
+        if (status === 'online') return '#00ff80';
+        if (status === 'reconnecting') return '#ffaa00';
+        return '#ff4444';
+    }
+
+    /**
+     * @param {'online' | 'reconnecting' | 'offline'} status
+     * @returns {string}
+     */
+    function getStatusText(status) {
+        if (status === 'online') return 'Online';
+        if (status === 'reconnecting') return 'Re-connection';
+        return 'Offline';
+    }
 </script>
 
 <div class="filter">
@@ -78,6 +114,7 @@
     <div class="device-list">
         {#each allDevices as deviceId, index}
             {@const battery = getLatestBattery(deviceId)}
+            {@const deviceStatus = getDeviceStatus(deviceId)}
             <label class="device-item">
                 <input
                     type="checkbox"
@@ -89,7 +126,28 @@
                 />
                 <span class="device-checkbox"></span>
                 <div class="device-info">
-                    <span class="device-label">{deviceId}</span>
+                    <div class="device-header">
+                        <span class="device-label">{deviceId}</span>
+                        {#if deviceStatus}
+                            <span class="device-location">{deviceStatus.location}</span>
+                        {/if}
+                    </div>
+
+                    {#if deviceStatus}
+                        <div class="status-indicator">
+                            <span
+                                class="status-dot"
+                                style="background: {getStatusColor(deviceStatus.status)}; box-shadow: 0 0 8px {getStatusColor(deviceStatus.status)};"
+                            ></span>
+                            <span
+                                class="status-text"
+                                style="color: {getStatusColor(deviceStatus.status)};"
+                            >
+                                {getStatusText(deviceStatus.status)}
+                            </span>
+                        </div>
+                    {/if}
+
                     <div class="battery-indicator">
                         <div class="battery-container">
                             <div
@@ -215,16 +273,68 @@
         gap: 0.5rem;
     }
 
+    .device-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
     .device-label {
         font-size: 0.875rem;
         font-family: 'JetBrains Mono', monospace;
         color: #ffffff;
         letter-spacing: 0.05em;
         text-transform: uppercase;
+        flex: 1;
+    }
+
+    .device-location {
+        font-size: 0.65rem;
+        font-family: 'JetBrains Mono', monospace;
+        color: #666;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        padding: 0.25rem 0.5rem;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid #2a2a2a;
     }
 
     .device-item input:not(:checked) + .device-checkbox + .device-info .device-label {
         color: #666;
+    }
+
+    /* Status indicator */
+    .status-indicator {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-glow {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.5;
+        }
+    }
+
+    .status-text {
+        font-size: 0.65rem;
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
     }
 
     /* Battery indicator */

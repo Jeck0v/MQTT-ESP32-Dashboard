@@ -14,55 +14,82 @@
 	let { chartData } = $props();
 
 	const CHART_HEIGHT = 300;
-	const CHART_PADDING = { top: 20, right: 60, bottom: 40, left: 60 };
+	const CHART_PADDING = { top: 20, right: 20, bottom: 60, left: 50 };
+	const MAX_BARS = 20;
 
-	let metrics = $derived({
-		tempMin: chartData.length > 0 ? Math.min(...chartData.map((d) => d.tempC)) : 0,
-		tempMax: chartData.length > 0 ? Math.max(...chartData.map((d) => d.tempC)) : 30,
-		humMin: chartData.length > 0 ? Math.min(...chartData.map((d) => d.humPct)) : 0,
-		humMax: chartData.length > 0 ? Math.max(...chartData.map((d) => d.humPct)) : 100
+	// Get unique devices
+	let devices = $derived(
+		Array.from(new Set(chartData.map((d) => d.deviceId))).sort()
+	);
+
+	let timestamps = $derived(() => {
+		const uniqueTs = Array.from(new Set(chartData.map((d) => d.ts)))
+			.sort((a, b) => a - b)
+			.slice(-MAX_BARS);
+		return uniqueTs;
+	});
+
+	let groupedData = $derived(() => {
+		const grouped = new Map();
+		timestamps().forEach((ts) => {
+			const deviceData = new Map();
+			devices.forEach((deviceId) => {
+				const point = chartData.find((d) => d.ts === ts && d.deviceId === deviceId);
+				if (point) {
+					deviceData.set(deviceId, point);
+				}
+			});
+			grouped.set(ts, deviceData);
+		});
+		return grouped;
+	});
+
+	let tempMetrics = $derived({
+		min: chartData.length > 0 ? Math.floor(Math.min(...chartData.map((d) => d.tempC)) - 2) : 0,
+		max: chartData.length > 0 ? Math.ceil(Math.max(...chartData.map((d) => d.tempC)) + 2) : 30
+	});
+
+	let humMetrics = $derived({
+		min: chartData.length > 0 ? Math.floor(Math.min(...chartData.map((d) => d.humPct)) - 5) : 0,
+		max: chartData.length > 0 ? Math.ceil(Math.max(...chartData.map((d) => d.humPct)) + 5) : 100
 	});
 
 	/**
-	 * Scale temperature value to chart coordinates
+	 * Scale value to chart coordinates
 	 * @param {number} value
+	 * @param {number} min
+	 * @param {number} max
 	 * @returns {number}
 	 */
-	function scaleTemp(value) {
-		const range = metrics.tempMax - metrics.tempMin || 1;
+	function scaleY(value, min, max) {
+		const range = max - min || 1;
 		const chartHeight = CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom;
-		return (
-			CHART_HEIGHT -
-			CHART_PADDING.bottom -
-			((value - metrics.tempMin) / range) * chartHeight
-		);
+		return ((value - min) / range) * chartHeight;
 	}
 
 	/**
-	 * Scale humidity value to chart coordinates
-	 * @param {number} value
-	 * @returns {number}
-	 */
-	function scaleHum(value) {
-		const range = metrics.humMax - metrics.humMin || 1;
-		const chartHeight = CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom;
-		return (
-			CHART_HEIGHT -
-			CHART_PADDING.bottom -
-			((value - metrics.humMin) / range) * chartHeight
-		);
-	}
-
-	/**
-	 * Calculate X position for data point
+	 * Get X position for timestamp group
 	 * @param {number} index
-	 * @param {number} total
 	 * @param {number} width
 	 * @returns {number}
 	 */
-	function getX(index, total, width) {
+	function getGroupX(index, width) {
 		const chartWidth = width - CHART_PADDING.left - CHART_PADDING.right;
-		return CHART_PADDING.left + (index / (total - 1 || 1)) * chartWidth;
+		const groupWidth = chartWidth / timestamps().length;
+		return CHART_PADDING.left + index * groupWidth;
+	}
+
+	/**
+	 * Get bar width for each device
+	 * @param {number} width
+	 * @returns {number}
+	 */
+	function getBarWidth(width) {
+		const chartWidth = width - CHART_PADDING.left - CHART_PADDING.right;
+		const groupWidth = chartWidth / timestamps().length;
+		const deviceCount = devices.length;
+		const barWidth = (groupWidth * 0.8) / deviceCount; // 80% of group width for bars
+		return Math.max(barWidth, 2); // Minimum 2px width
 	}
 
 	/**
@@ -76,144 +103,245 @@
 	}
 
 	/**
+	 * Format timestamp for axis label (short version)
+	 * @param {number} ts
+	 * @returns {string}
+	 */
+	function formatTimeShort(ts) {
+		const date = new Date(ts * 1000);
+		return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+	}
+
+	/**
 	 * Get device color
 	 * @param {string} deviceId
 	 * @returns {string}
 	 */
 	function getDeviceColor(deviceId) {
-		const colors = ['#00ffff', '#ff00ff', '#ffff00', '#00ff00', '#ff8800'];
-		const hash = deviceId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-		return colors[hash % colors.length];
+		const colors = [
+			'#00ffff', // Cyan
+			'#ff00ff', // Magenta
+			'#ffff00', // Yellow
+			'#00ff80', // Green
+			'#ff8800', // Orange
+			'#00aaff', // Blue
+			'#ff0080', // Pink
+			'#80ff00', // Lime
+			'#ff0000', // Red
+			'#8000ff'  // Purple
+		];
+		const index = devices.indexOf(deviceId);
+		return colors[index % colors.length];
 	}
 </script>
 
-<div class="chart-container">
-	<div class="chart-header">
-		<div class="chart-title">TELEMETRY DATA</div>
-		<div class="chart-legend">
-			<div class="legend-item">
-				<span class="legend-dot" style="background: #00ffff;"></span>
-				<span class="legend-label">TEMPERATURE</span>
+<div class="charts-container">
+	<!-- Temperature Bar Chart -->
+	<div class="chart-container">
+		<div class="chart-header">
+			<div class="chart-title">TEMPERATURE (°C)</div>
+			<div class="chart-legend">
+				{#each devices as deviceId}
+					<div class="legend-item">
+						<span class="legend-dot" style="background: {getDeviceColor(deviceId)};"></span>
+						<span class="legend-label">{deviceId}</span>
+					</div>
+				{/each}
 			</div>
-			<div class="legend-item">
-				<span class="legend-dot" style="background: #ff00ff;"></span>
-				<span class="legend-label">HUMIDITY</span>
-			</div>
+		</div>
+
+		<div class="chart-wrapper">
+			{#if chartData.length === 0}
+				<div class="chart-empty">
+					<div class="empty-text">NO DATA AVAILABLE</div>
+				</div>
+			{:else}
+				<svg class="chart-svg" viewBox="0 0 800 {CHART_HEIGHT}">
+					<!-- Grid lines -->
+					<g class="grid">
+						{#each Array(5) as _, i}
+							{@const y = CHART_PADDING.top + (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
+							<line
+								x1={CHART_PADDING.left}
+								y1={y}
+								x2={800 - CHART_PADDING.right}
+								y2={y}
+								stroke="#2a2a2a"
+								stroke-width="1"
+							/>
+						{/each}
+					</g>
+
+					<!-- Y-axis labels -->
+					<g class="y-axis">
+						{#each Array(5) as _, i}
+							{@const value = tempMetrics.min + (i * (tempMetrics.max - tempMetrics.min)) / 4}
+							{@const y = CHART_HEIGHT - CHART_PADDING.bottom - (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
+							<text x={CHART_PADDING.left - 10} y={y} class="axis-label" text-anchor="end">
+								{value.toFixed(1)}
+							</text>
+						{/each}
+					</g>
+
+					<!-- Temperature bars -->
+					<g class="bars">
+						{#each timestamps() as ts, tsIndex}
+							{@const deviceData = groupedData().get(ts)}
+							{@const groupX = getGroupX(tsIndex, 800)}
+							{@const barWidth = getBarWidth(800)}
+							{#if deviceData}
+								{#each devices as deviceId, deviceIndex}
+									{@const point = deviceData.get(deviceId)}
+									{#if point}
+										{@const color = getDeviceColor(deviceId)}
+										{@const barHeight = scaleY(point.tempC, tempMetrics.min, tempMetrics.max)}
+										{@const barX = groupX + deviceIndex * barWidth + (0.1 * (groupX + barWidth * devices.length - groupX)) / 2}
+										{@const barY = CHART_HEIGHT - CHART_PADDING.bottom - barHeight}
+										<rect
+											x={barX}
+											y={barY}
+											width={barWidth}
+											height={barHeight}
+											fill={color}
+											opacity="0.8"
+											class="bar"
+										>
+											<title>{deviceId}: {point.tempC.toFixed(1)}°C at {formatTime(point.ts)}</title>
+										</rect>
+									{/if}
+								{/each}
+							{/if}
+						{/each}
+					</g>
+
+					<!-- X-axis labels -->
+					<g class="x-axis">
+						{#each timestamps() as ts, index}
+							{@const groupX = getGroupX(index, 800)}
+							{@const groupWidth = (800 - CHART_PADDING.left - CHART_PADDING.right) / timestamps().length}
+							<text
+								x={groupX + groupWidth / 2}
+								y={CHART_HEIGHT - CHART_PADDING.bottom + 20}
+								class="axis-label x-label"
+								text-anchor="middle"
+								transform="rotate(-45, {groupX + groupWidth / 2}, {CHART_HEIGHT - CHART_PADDING.bottom + 20})"
+							>
+								{formatTimeShort(ts)}
+							</text>
+						{/each}
+					</g>
+				</svg>
+			{/if}
 		</div>
 	</div>
 
-	<div class="chart-wrapper">
-		{#if chartData.length === 0}
-			<div class="chart-empty">
-				<div class="empty-text">NO DATA AVAILABLE</div>
+	<!-- Humidity Bar Chart -->
+	<div class="chart-container">
+		<div class="chart-header">
+			<div class="chart-title">HUMIDITY (%)</div>
+			<div class="chart-legend">
+				{#each devices as deviceId}
+					<div class="legend-item">
+						<span class="legend-dot" style="background: {getDeviceColor(deviceId)};"></span>
+						<span class="legend-label">{deviceId}</span>
+					</div>
+				{/each}
 			</div>
-		{:else}
-			<svg class="chart-svg" viewBox="0 0 800 {CHART_HEIGHT}" preserveAspectRatio="none">
-				<!-- Grid lines -->
-				<g class="grid">
-					{#each Array(5) as _, i}
-						{@const y = CHART_PADDING.top + (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
-						<line
-							x1={CHART_PADDING.left}
-							y1={y}
-							x2={800 - CHART_PADDING.right}
-							y2={y}
-							stroke="#2a2a2a"
-							stroke-width="1"
-						/>
-					{/each}
-				</g>
+		</div>
 
-				<!-- Temperature line -->
-				<g class="temp-line">
-					{#each chartData as point, i}
-						{#if i > 0}
-							{@const prevPoint = chartData[i - 1]}
+		<div class="chart-wrapper">
+			{#if chartData.length === 0}
+				<div class="chart-empty">
+					<div class="empty-text">NO DATA AVAILABLE</div>
+				</div>
+			{:else}
+				<svg class="chart-svg" viewBox="0 0 800 {CHART_HEIGHT}">
+					<!-- Grid lines -->
+					<g class="grid">
+						{#each Array(5) as _, i}
+							{@const y = CHART_PADDING.top + (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
 							<line
-								x1={getX(i - 1, chartData.length, 800)}
-								y1={scaleTemp(prevPoint.tempC)}
-								x2={getX(i, chartData.length, 800)}
-								y2={scaleTemp(point.tempC)}
-								stroke="#00ffff"
-								stroke-width="2"
+								x1={CHART_PADDING.left}
+								y1={y}
+								x2={800 - CHART_PADDING.right}
+								y2={y}
+								stroke="#2a2a2a"
+								stroke-width="1"
 							/>
-						{/if}
-					{/each}
-					{#each chartData as point, i}
-						<circle
-							cx={getX(i, chartData.length, 800)}
-							cy={scaleTemp(point.tempC)}
-							r="3"
-							fill="#00ffff"
-							class="data-point"
-						>
-							<title>{point.deviceId}: {point.tempC.toFixed(1)}°C</title>
-						</circle>
-					{/each}
-				</g>
+						{/each}
+					</g>
 
-				<!-- Humidity line -->
-				<g class="hum-line">
-					{#each chartData as point, i}
-						{#if i > 0}
-							{@const prevPoint = chartData[i - 1]}
-							<line
-								x1={getX(i - 1, chartData.length, 800)}
-								y1={scaleHum(prevPoint.humPct)}
-								x2={getX(i, chartData.length, 800)}
-								y2={scaleHum(point.humPct)}
-								stroke="#ff00ff"
-								stroke-width="2"
-							/>
-						{/if}
-					{/each}
-					{#each chartData as point, i}
-						<circle
-							cx={getX(i, chartData.length, 800)}
-							cy={scaleHum(point.humPct)}
-							r="3"
-							fill="#ff00ff"
-							class="data-point"
-						>
-							<title>{point.deviceId}: {point.humPct.toFixed(1)}%</title>
-						</circle>
-					{/each}
-				</g>
+					<!-- Y-axis labels -->
+					<g class="y-axis">
+						{#each Array(5) as _, i}
+							{@const value = humMetrics.min + (i * (humMetrics.max - humMetrics.min)) / 4}
+							{@const y = CHART_HEIGHT - CHART_PADDING.bottom - (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
+							<text x={CHART_PADDING.left - 10} y={y} class="axis-label" text-anchor="end">
+								{value.toFixed(0)}
+							</text>
+						{/each}
+					</g>
 
-				<!-- Y-axis labels (Temperature) -->
-				<g class="y-axis-temp">
-					{#each Array(5) as _, i}
-						{@const value = metrics.tempMin + (i * (metrics.tempMax - metrics.tempMin)) / 4}
-						{@const y = CHART_HEIGHT - CHART_PADDING.bottom - (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
-						<text x={CHART_PADDING.left - 10} y={y} class="axis-label" text-anchor="end">
-							{value.toFixed(0)}°C
-						</text>
-					{/each}
-				</g>
+					<!-- Humidity bars -->
+					<g class="bars">
+						{#each timestamps() as ts, tsIndex}
+							{@const deviceData = groupedData().get(ts)}
+							{@const groupX = getGroupX(tsIndex, 800)}
+							{@const barWidth = getBarWidth(800)}
+							{#if deviceData}
+								{#each devices as deviceId, deviceIndex}
+									{@const point = deviceData.get(deviceId)}
+									{#if point}
+										{@const color = getDeviceColor(deviceId)}
+										{@const barHeight = scaleY(point.humPct, humMetrics.min, humMetrics.max)}
+										{@const barX = groupX + deviceIndex * barWidth + (0.1 * (groupX + barWidth * devices.length - groupX)) / 2}
+										{@const barY = CHART_HEIGHT - CHART_PADDING.bottom - barHeight}
+										<rect
+											x={barX}
+											y={barY}
+											width={barWidth}
+											height={barHeight}
+											fill={color}
+											opacity="0.8"
+											class="bar"
+										>
+											<title>{deviceId}: {point.humPct.toFixed(1)}% at {formatTime(point.ts)}</title>
+										</rect>
+									{/if}
+								{/each}
+							{/if}
+						{/each}
+					</g>
 
-				<!-- Y-axis labels (Humidity) -->
-				<g class="y-axis-hum">
-					{#each Array(5) as _, i}
-						{@const value = metrics.humMin + (i * (metrics.humMax - metrics.humMin)) / 4}
-						{@const y = CHART_HEIGHT - CHART_PADDING.bottom - (i * (CHART_HEIGHT - CHART_PADDING.top - CHART_PADDING.bottom)) / 4}
-						<text x={800 - CHART_PADDING.right + 10} y={y} class="axis-label axis-label-right">
-							{value.toFixed(0)}%
-						</text>
-					{/each}
-				</g>
-			</svg>
-
-			<div class="chart-footer">
-				<span class="time-label">{formatTime(chartData[0].ts)}</span>
-				<span class="time-label"
-					>{formatTime(chartData[chartData.length - 1].ts)}</span
-				>
-			</div>
-		{/if}
+					<!-- X-axis labels -->
+					<g class="x-axis">
+						{#each timestamps() as ts, index}
+							{@const groupX = getGroupX(index, 800)}
+							{@const groupWidth = (800 - CHART_PADDING.left - CHART_PADDING.right) / timestamps().length}
+							<text
+								x={groupX + groupWidth / 2}
+								y={CHART_HEIGHT - CHART_PADDING.bottom + 20}
+								class="axis-label x-label"
+								text-anchor="middle"
+								transform="rotate(-45, {groupX + groupWidth / 2}, {CHART_HEIGHT - CHART_PADDING.bottom + 20})"
+							>
+								{formatTimeShort(ts)}
+							</text>
+						{/each}
+					</g>
+				</svg>
+			{/if}
+		</div>
 	</div>
 </div>
 
 <style>
+	.charts-container {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+	}
+
 	.chart-container {
 		background: #1a1a1a;
 		border: 1px solid #2a2a2a;
@@ -234,8 +362,8 @@
 
 	.chart-header {
 		display: flex;
-		justify-content: space-between;
-		align-items: center;
+		flex-direction: column;
+		gap: 1rem;
 		margin-bottom: 1.5rem;
 		padding-bottom: 1rem;
 		border-bottom: 1px solid #2a2a2a;
@@ -251,7 +379,8 @@
 
 	.chart-legend {
 		display: flex;
-		gap: 1.5rem;
+		flex-wrap: wrap;
+		gap: 1rem;
 	}
 
 	.legend-item {
@@ -263,15 +392,17 @@
 	.legend-dot {
 		width: 8px;
 		height: 8px;
-		border-radius: 50%;
+		border-radius: 2px;
+		box-shadow: 0 0 8px currentColor;
 	}
 
 	.legend-label {
 		font-size: 0.65rem;
 		font-weight: 600;
-		letter-spacing: 0.1em;
+		letter-spacing: 0.05em;
 		color: #888;
 		text-transform: uppercase;
+		font-family: 'JetBrains Mono', monospace;
 	}
 
 	.chart-wrapper {
@@ -301,13 +432,14 @@
 		display: block;
 	}
 
-	.data-point {
+	.bar {
 		cursor: pointer;
-		transition: r 0.2s ease;
+		transition: opacity 0.2s ease;
 	}
 
-	.data-point:hover {
-		r: 5;
+	.bar:hover {
+		opacity: 1 !important;
+		filter: brightness(1.2);
 	}
 
 	.axis-label {
@@ -317,35 +449,27 @@
 		dominant-baseline: middle;
 	}
 
-	.axis-label-right {
-		text-anchor: start;
+	.x-label {
+		font-size: 0.6rem;
 	}
 
-	.chart-footer {
-		display: flex;
-		justify-content: space-between;
-		margin-top: 0.75rem;
-		padding-top: 0.75rem;
-		border-top: 1px solid #2a2a2a;
-	}
-
-	.time-label {
-		font-size: 0.65rem;
-		font-family: 'JetBrains Mono', monospace;
-		color: #666;
-		letter-spacing: 0.05em;
+	@media (max-width: 1200px) {
+		.charts-container {
+			grid-template-columns: 1fr;
+		}
 	}
 
 	@media (max-width: 768px) {
 		.chart-header {
-			flex-direction: column;
-			align-items: flex-start;
-			gap: 1rem;
+			gap: 0.75rem;
 		}
 
 		.chart-legend {
-			flex-direction: column;
 			gap: 0.75rem;
+		}
+
+		.x-label {
+			font-size: 0.55rem;
 		}
 	}
 </style>

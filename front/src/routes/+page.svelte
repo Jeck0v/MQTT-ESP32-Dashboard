@@ -14,18 +14,47 @@
      * @property {string} topic
      */
 
+    /**
+     * @typedef {Object} DeviceStatus
+     * @property {string} deviceId
+     * @property {'online' | 'reconnecting' | 'offline'} status
+     * @property {number} lastSeen
+     * @property {string} location
+     */
+
     /** @type {WebSocket | null} */
     let ws = $state(null);
     let message = $state('');
     let connected = $state(false);
     let authenticated = $state(false);
-    let hasDevices = $derived(allDevices.length > 0);
 
     // Filter - Dynamic device discovery
     /** @type {string[]} */
     let allDevices = $state([]);
     /** @type {string[]} */
     let selectedDevices = $state([]);
+    let hasDevices = $derived(allDevices.length > 0);
+
+    // Device status tracking
+    /** @type {Map<string, DeviceStatus>} */
+    let deviceStatuses = $state(new Map());
+
+    // Location mapping - default locations for devices
+    const DEVICE_LOCATIONS = {
+        'esp32-01': 'Paris',
+        'esp32-02': 'Berlin',
+        'esp32-03': 'London',
+        'esp32-04': 'Tokyo',
+        'esp32-05': 'New York',
+        'esp32-06': 'Sydney',
+        'esp32-07': 'Madrid',
+        'esp32-08': 'Rome',
+        'esp32-09': 'Amsterdam',
+        'esp32-10': 'Dubai'
+    };
+
+    const OFFLINE_TIMEOUT = 30000; // 30 seconds
+    const RECONNECT_WINDOW = 10000; // 10 seconds
 
     /** @type {TelemetryRecord[]} */
     let telemetryData = $state([]);
@@ -54,6 +83,78 @@
     );
 
     const AUTH_KEY = 'mqtt-classroom-secret-2026';
+
+    /**
+     * Update device status when receiving telemetry
+     * @param {string} deviceId
+     */
+    function updateDeviceStatus(deviceId) {
+        const now = Date.now();
+        const existingStatus = deviceStatuses.get(deviceId);
+
+        let status = 'online';
+
+        // If device was offline and comes back, mark as reconnecting
+        if (existingStatus && existingStatus.status === 'offline') {
+            status = 'reconnecting';
+            // After a delay, change back to online
+            setTimeout(() => {
+                const current = deviceStatuses.get(deviceId);
+                if (current && current.status === 'reconnecting') {
+                    deviceStatuses.set(deviceId, {
+                        ...current,
+                        status: 'online'
+                    });
+                    deviceStatuses = new Map(deviceStatuses);
+                }
+            }, 3000);
+        }
+
+        const location = DEVICE_LOCATIONS[deviceId] || 'Unknown';
+
+        deviceStatuses.set(deviceId, {
+            deviceId,
+            status,
+            lastSeen: now,
+            location
+        });
+        deviceStatuses = new Map(deviceStatuses);
+    }
+
+    /**
+     * Check for offline devices periodically
+     */
+    function checkOfflineDevices() {
+        const now = Date.now();
+        let updated = false;
+
+        deviceStatuses.forEach((deviceStatus, deviceId) => {
+            const timeSinceLastSeen = now - deviceStatus.lastSeen;
+
+            if (timeSinceLastSeen > OFFLINE_TIMEOUT && deviceStatus.status !== 'offline') {
+                deviceStatuses.set(deviceId, {
+                    ...deviceStatus,
+                    status: 'offline'
+                });
+                updated = true;
+            }
+        });
+
+        if (updated) {
+            deviceStatuses = new Map(deviceStatuses);
+        }
+    }
+
+    // Check for offline devices every 5 seconds
+    let offlineCheckInterval;
+    $effect(() => {
+        if (authenticated) {
+            offlineCheckInterval = setInterval(checkOfflineDevices, 5000);
+        }
+        return () => {
+            if (offlineCheckInterval) clearInterval(offlineCheckInterval);
+        };
+    });
 
     function connect() {
         ws = new WebSocket('ws://localhost:8080');
@@ -95,6 +196,9 @@
                         allDevices = [...allDevices, telemetry.deviceId].sort();
                         selectedDevices = [...selectedDevices, telemetry.deviceId];
                     }
+
+                    // Update device status
+                    updateDeviceStatus(telemetry.deviceId);
 
                     latestTelemetry = telemetry;
                     telemetryData = [telemetry, ...telemetryData].slice(0, MAX_MESSAGES);
@@ -177,7 +281,7 @@
                 <!-- Left sidebar -->
                 <div class="sidebar">
                     {#if hasDevices}
-                        <DeviceFilter bind:selectedDevices {allDevices} {telemetryData} />
+                        <DeviceFilter bind:selectedDevices {allDevices} {telemetryData} {deviceStatuses} />
                     {:else}
                         <div class="no-devices-panel">
                             <div class="no-devices-header">
