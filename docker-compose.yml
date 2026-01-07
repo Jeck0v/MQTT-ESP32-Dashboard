@@ -1,0 +1,22 @@
+services:
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  rust-server:
+    build:
+      context: ./bridge/demo
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - MQTT_HOST=${MQTT_HOST}
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_USERNAME=${MQTT_USERNAME}
+      - MQTT_PASSWORD=${MQTT_PASSWORD}
+      - AUTH_KEY=${AUTH_KEY}
+    depends_on:
+      - mqtt
